@@ -14,6 +14,9 @@ enum Tools {
     static let ffprobe = find("ffprobe")
 
     static func find(_ name: String) -> String? {
+        // The App Store build ships its own LGPL ffmpeg/ffprobe inside the bundle (sandbox-inherited helpers).
+        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/\(name)").path
+        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
         let envPaths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
         for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin"] + envPaths {
             let p = (dir as NSString).appendingPathComponent(name)
@@ -114,7 +117,9 @@ enum ResumeStore {
     }
 
     static var recents: [String] {
-        (UserDefaults.standard.stringArray(forKey: recentsKey) ?? []).filter { FileManager.default.fileExists(atPath: $0) }
+        (UserDefaults.standard.stringArray(forKey: recentsKey) ?? []).filter {
+            BookmarkStore.has($0) || FileManager.default.fileExists(atPath: $0)
+        }
     }
 
     static func touch(_ path: String) {
@@ -122,5 +127,52 @@ enum ResumeStore {
         r.removeAll { $0 == path }
         r.insert(path, at: 0)
         UserDefaults.standard.set(Array(r.prefix(12)), forKey: recentsKey)
+    }
+}
+
+/// App Sandbox: we may only touch files the user picked. Security-scoped bookmarks keep that access
+/// across launches (recent files, favorites) and for folders the user granted (sibling subtitle files).
+enum BookmarkStore {
+    private static let key = "securityBookmarks"
+    private static var active: [String: URL] = [:]
+
+    static func has(_ path: String) -> Bool { all[path] != nil }
+
+    private static var all: [String: Data] {
+        (UserDefaults.standard.dictionary(forKey: key) as? [String: Data]) ?? [:]
+    }
+
+    /// Call while we hold access (right after an open panel, drop or Finder open).
+    static func remember(_ url: URL) {
+        guard let data = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil,
+                                               relativeTo: nil) else { return }
+        var d = all
+        d[url.path] = data
+        UserDefaults.standard.set(d, forKey: key)
+    }
+
+    /// Resolves and starts accessing a remembered file or folder; returns its URL.
+    @discardableResult
+    static func access(_ path: String) -> URL? {
+        if let url = active[path] { return url }
+        guard let data = all[path] else { return nil }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil,
+                                 bookmarkDataIsStale: &stale) else { return nil }
+        guard url.startAccessingSecurityScopedResource() else { return nil }
+        active[path] = url
+        if stale { remember(url) }
+        return url
+    }
+
+    /// Starts accessing the nearest granted ancestor folder of `url`, if any.
+    @discardableResult
+    static func accessFolder(containing url: URL) -> Bool {
+        var dir = url.deletingLastPathComponent()
+        while dir.path != "/" {
+            if access(dir.path) != nil { return true }
+            dir = dir.deletingLastPathComponent()
+        }
+        return false
     }
 }

@@ -57,6 +57,13 @@ struct AppCommands: Commands {
                 .keyboardShortcut("o", modifiers: [.command, .shift])
                 .disabled(engine.mediaURL == nil)
         }
+        CommandGroup(after: .help) {
+            Button("第三方开源许可（FFmpeg）") {
+                if let url = Bundle.main.url(forResource: "FFmpeg-NOTICE", withExtension: "txt", subdirectory: "Licenses") {
+                    NSWorkspace.shared.open(url)
+                }
+            }
+        }
         CommandMenu("播放") {
             ForEach(PlayerAction.allCases.filter { !PlayerAction.holds.contains($0) }) { action in
                 Button("\(action.title)\t\(shortcuts.label(action))") { engine.perform(action) }

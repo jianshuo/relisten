@@ -126,11 +126,19 @@ enum SubtitleLoader {
     static let fileExtensions: Set<String> = ["srt", "vtt", "ass", "ssa"]
     static let textCodecs: Set<String> = ["subrip", "srt", "ass", "ssa", "mov_text", "webvtt", "text"]
 
+    /// Whether we may list the media's folder (false under App Sandbox until the user grants it).
+    static func canReadFolder(of media: URL) -> Bool {
+        BookmarkStore.accessFolder(containing: media)
+        return (try? FileManager.default.contentsOfDirectory(at: media.deletingLastPathComponent(),
+                                                             includingPropertiesForKeys: nil)) != nil
+    }
+
     /// External files sitting next to the media (Movie.srt, Movie.en.srt …) plus embedded text tracks.
     static func discover(for media: URL) async -> [SubtitleSource] {
         var found: [SubtitleSource] = []
         let base = media.deletingPathExtension().lastPathComponent.lowercased()
         let dir = media.deletingLastPathComponent()
+        BookmarkStore.accessFolder(containing: media)
         let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         for f in files.sorted(by: { $0.lastPathComponent < $1.lastPathComponent })
         where fileExtensions.contains(f.pathExtension.lowercased())

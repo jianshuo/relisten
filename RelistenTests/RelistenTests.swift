@@ -137,23 +137,17 @@ final class SentenceTrackerTests: XCTestCase {
 
 /// Builds real media with ffmpeg and checks embedded-subtitle extraction through both paths.
 final class EmbeddedSubtitleTests: XCTestCase {
+    /// Copies a bundled fixture (built once with ffmpeg: 4 s of video + sine + 2 English cues) into a fresh dir.
     func makeMedia(ext: String, codec: String) throws -> URL {
-        guard let ffmpeg = Tools.ffmpeg else { throw XCTSkip("ffmpeg not installed") }
+        guard Tools.ffmpeg != nil else { throw XCTSkip("ffmpeg not available") }
+        let bundle = Bundle(for: EmbeddedSubtitleTests.self)
+        guard let fixture = bundle.url(forResource: "clip", withExtension: ext) else {
+            XCTFail("missing fixture clip.\(ext)"); throw XCTSkip("fixture")
+        }
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let srt = dir.appendingPathComponent("s.srt")
-        try "1\n00:00:00,500 --> 00:00:01,500\nFirst sentence.\n\n2\n00:00:02,000 --> 00:00:03,000\nSecond one.\n"
-            .write(to: srt, atomically: true, encoding: .utf8)
         let out = dir.appendingPathComponent("clip.\(ext)")
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: ffmpeg)
-        p.standardInput = FileHandle.nullDevice
-        p.arguments = ["-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=4", "-f", "lavfi", "-i", "sine=d=4",
-                       "-i", srt.path, "-map", "0", "-map", "1", "-map", "2", "-c:v", "libx264", "-c:a", "aac",
-                       "-c:s", codec, "-metadata:s:s:0", "language=eng", out.path]
-        try p.run()
-        p.waitUntilExit()
-        XCTAssertEqual(p.terminationStatus, 0)
+        try FileManager.default.copyItem(at: fixture, to: out)
         return out
     }
 

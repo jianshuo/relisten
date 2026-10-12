@@ -66,6 +66,8 @@ final class PlayerEngine: ObservableObject {
     @Published private(set) var loading: String?
     @Published private(set) var notice: String?
     @Published private(set) var toast: String?
+    /// Sandbox hasn't been granted the media's folder, so sibling .srt files are invisible.
+    @Published private(set) var needsFolderAccess = false
     @Published var loopEnabled = false
     @Published var pauseAfterEach = false
     @Published var blindMode: Bool
@@ -301,7 +303,39 @@ final class PlayerEngine: ObservableObject {
 
     // MARK: Opening media & subtitles
 
+    /// Reopen a file by path (recents, favorites) through its security-scoped bookmark.
+    func open(path: String, then: (() -> Void)? = nil) {
+        open(BookmarkStore.access(path) ?? URL(fileURLWithPath: path), then: then)
+    }
+
+    /// Ask the user to grant the media's folder so sibling subtitle files can be read.
+    func grantFolderAccess() {
+        guard let url = mediaURL else { return }
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.directoryURL = url.deletingLastPathComponent()
+        panel.prompt = "允许读取"
+        panel.message = "允许 Relisten 读取这个文件夹，就能自动加载视频旁边的字幕文件（.srt / .vtt / .ass）"
+        guard panel.runModal() == .OK, let folder = panel.url else { return }
+        BookmarkStore.remember(folder)
+        Task {
+            let found = await SubtitleLoader.discover(for: url)
+            needsFolderAccess = !SubtitleLoader.canReadFolder(of: url)
+            for s in found where !sources.contains(s) { sources.append(s) }
+            needsFolderAccess = !SubtitleLoader.canReadFolder(of: url)
+            if sourceID == nil, let first = sources.first(where: \.isEnglish) ?? sources.first {
+                await selectSource(first)
+                notice = nil
+            }
+            if translationSourceID == nil {
+                await selectTranslation(SubtitleLoader.defaultTranslation(in: sources, excluding: sourceID))
+            }
+        }
+    }
+
     func open(_ url: URL, then: (() -> Void)? = nil) {
+        BookmarkStore.remember(url)
         if SubtitleLoader.fileExtensions.contains(url.pathExtension.lowercased()) {
             loadExternalSubtitle(url)
             return
@@ -345,7 +379,9 @@ final class PlayerEngine: ObservableObject {
                 await selectTranslation(SubtitleLoader.defaultTranslation(in: found, excluding: preferred.id))
             } else {
                 setCues([], sourceID: nil)
-                notice = "没找到字幕：把同名的 .srt / .vtt 放在文件旁边，或直接把字幕文件拖进窗口"
+                notice = needsFolderAccess
+                    ? "没有内封字幕。点右侧「允许读取同目录的字幕文件」，或直接把字幕文件拖进窗口"
+                    : "没找到字幕：把同名的 .srt / .vtt 放在文件旁边，或直接把字幕文件拖进窗口"
             }
 
             let saved = ResumeStore.position(for: url.path) ?? 0
@@ -424,7 +460,7 @@ final class PlayerEngine: ObservableObject {
                 ?? self.cues.lastIndex(startingAtOrBefore: fav.start)
             if let index { self.goToSentence(index) }
         }
-        if mediaURL?.path == fav.path { go() } else { open(URL(fileURLWithPath: fav.path), then: go) }
+        if mediaURL?.path == fav.path { go() } else { open(path: fav.path, then: go) }
     }
 
     func savePosition() {

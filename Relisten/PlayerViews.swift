@@ -299,6 +299,14 @@ struct CueListView: View {
                 }
             }
             .padding(8)
+            if engine.needsFolderAccess {
+                Button { engine.grantFolderAccess() } label: {
+                    Label("允许读取同目录的字幕文件", systemImage: "folder.badge.plus").frame(maxWidth: .infinity)
+                }
+                .controlSize(.small)
+                .padding(.horizontal, 8).padding(.bottom, 8)
+                .help("沙盒限制：授权一次所在文件夹，以后自动加载视频旁边的 .srt / .vtt")
+            }
             Divider()
             ScrollViewReader { proxy in
                 List(visibleCues) { cue in
@@ -387,7 +395,7 @@ struct EmptyStateView: View {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("最近打开").font(.caption).foregroundStyle(.secondary)
                     ForEach(recents.prefix(6), id: \.self) { path in
-                        Button((path as NSString).lastPathComponent) { engine.open(URL(fileURLWithPath: path)) }
+                        Button((path as NSString).lastPathComponent) { engine.open(path: path) }
                             .buttonStyle(.link)
                     }
                 }
