@@ -187,6 +187,36 @@ final class PlayerEngine: ObservableObject {
         }
     }
 
+    /// Launch-argument-only screenshot states (`-RelistenDemo a|b|c`); never reachable from the UI.
+    private func applyDemo(_ mode: String) {
+        func park(on index: Int) {
+            guard cues.indices.contains(index) else { return }
+            tracker.jump(to: index)
+            syncFromTracker()
+            seek(to: cues[index].start + 0.4)
+            player.pause()
+        }
+        mainWindow?.setFrame(NSRect(x: 80, y: 120, width: 1440, height: 860), display: true)
+        NSApp.activate(ignoringOtherApps: true)
+        mainWindow?.makeKeyAndOrderFront(nil)
+        switch mode {
+        case "a":
+            blindMode = false; showTranslation = true; loopEnabled = true
+            park(on: 8); tracker.countLoop(); syncFromTracker()
+        case "b":
+            blindMode = true; showTranslation = false; pauseAfterEach = true
+            park(on: 4)
+        case "c":
+            blindMode = false; showTranslation = true; setSpeed(0.75)
+            park(on: 11)
+            let start = cues[11].start
+            fragment = (start + 0.6) ... (start + 2.4)
+            fragmentPass = 4
+            toast = nil
+        default: break
+        }
+    }
+
     // MARK: Fragment loop
 
     /// "Didn't catch that": loop the last few seconds, over and over.
@@ -362,6 +392,11 @@ final class PlayerEngine: ObservableObject {
 
             let item = AVPlayerItem(asset: asset)
             item.audioTimePitchAlgorithm = .timeDomain   // speed changes keep the voice's pitch
+            // Never let AVPlayer burn embedded subtitles onto the video: that would defeat blind mode.
+            player.appliesMediaSelectionCriteriaAutomatically = false
+            if let legible = try? await asset.loadMediaSelectionGroup(for: .legible) {
+                item.select(nil, in: legible)
+            }
             player.replaceCurrentItem(with: item)
             player.defaultRate = speed
             mediaURL = url
@@ -388,6 +423,7 @@ final class PlayerEngine: ObservableObject {
             let start = (saved > 1 && saved < duration - 3) ? saved : 0
             jump(to: start)
             if start > 0 { showToast("从上次的 \(formatTime(start)) 继续") }
+            if let demo = UserDefaults.standard.string(forKey: "RelistenDemo") { applyDemo(demo) }
         } catch {
             notice = error.localizedDescription
         }
