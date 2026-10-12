@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 TEAM=97XBW2A43H
-BUNDLE_ID=com.jianshuo.relisten
+BUNDLE_ID=com.wangjianshuo.relisten
 APP_SIGN="Apple Distribution: Jian Shuo Wang ($TEAM)"
 PKG_SIGN="3rd Party Mac Developer Installer: Jian Shuo Wang ($TEAM)"
 PROFILE="${PROFILE:?set PROFILE to the Mac App Store provisioning profile}"

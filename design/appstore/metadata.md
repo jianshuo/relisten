@@ -1,6 +1,6 @@
 # Relisten · App Store 文案
 
-- Bundle ID: `com.jianshuo.relisten` · SKU: `relisten-mac` · 平台: macOS
+- Bundle ID: `com.wangjianshuo.relisten` · SKU: `relisten-mac` · 平台: macOS
 - 类别: 教育（次要: 效率） · 价格: 免费 · 年龄分级: 4+
 - 隐私政策 / 技术支持 URL: https://jianshuo.dev/a/relisten/
 - App 隐私: 不收集任何数据（Data Not Collected）
