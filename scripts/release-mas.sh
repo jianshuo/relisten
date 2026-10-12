@@ -30,6 +30,7 @@ rm -rf "$OUT" && mkdir -p "$OUT"
 cp -R build/dd/Build/Products/Release/Relisten.app "$OUT/"
 APP="$OUT/Relisten.app"
 cp "$PROFILE" "$APP/Contents/embedded.provisionprofile"
+chmod -R u+rwX,go+rX "$APP"   # every file must be world-readable (ITMS 90255)
 
 ENT="$OUT/app.entitlements"
 cp Relisten/Relisten.entitlements "$ENT"

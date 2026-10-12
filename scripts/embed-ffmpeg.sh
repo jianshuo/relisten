@@ -14,7 +14,7 @@ fi
 
 mkdir -p "$DST" "$LIC"
 cp -f "$SRC/ffmpeg" "$SRC/ffprobe" "$DST/"
-cp -f "$SRC/COPYING.LGPLv2.1" "$LIC/FFmpeg-LGPLv2.1.txt"
+install -m 644 "$SRC/COPYING.LGPLv2.1" "$LIC/FFmpeg-LGPLv2.1.txt"
 VERSION="$(cat "$SRC/VERSION")"
 cat > "$LIC/FFmpeg-NOTICE.txt" <<EOF
 Relisten includes the command-line tools ffmpeg and ffprobe from FFmpeg $VERSION
