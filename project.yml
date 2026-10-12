@@ -1,0 +1,44 @@
+name: Relisten
+options:
+  bundleIdPrefix: com.jianshuo
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    CODE_SIGN_IDENTITY: "-"
+    CODE_SIGN_STYLE: Manual
+targets:
+  Relisten:
+    type: application
+    platform: macOS
+    sources: [Relisten]
+    info:
+      path: Relisten/Info.plist
+      properties:
+        CFBundleDisplayName: Relisten
+        CFBundleName: Relisten
+        LSApplicationCategoryType: public.app-category.education
+        NSHumanReadableCopyright: "王建硕"
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Media
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.movie, public.audio, public.audiovisual-content]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.jianshuo.relisten
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_APP_SANDBOX: NO
+  RelistenTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [RelistenTests]
+    dependencies:
+      - target: Relisten
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES

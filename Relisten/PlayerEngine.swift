@@ -1,0 +1,328 @@
+import AppKit
+import AVFoundation
+import Combine
+
+/// Pure sentence state machine: which cue we're "on", and what to do when it ends.
+/// Kept free of AVPlayer so it can be unit-tested.
+struct SentenceTracker {
+    enum Decision: Equatable { case none, loopBack(Int), pause }
+
+    var cues: [Cue]
+    private(set) var focus: Int?
+    private(set) var pass = 1
+
+    init(cues: [Cue]) { self.cues = cues }
+
+    /// Manual navigation (jump, replay, scrub) starts a fresh pass on that cue.
+    mutating func jump(to index: Int?) {
+        focus = index
+        pass = 1
+    }
+
+    mutating func countLoop() { pass += 1 }
+
+    /// Called on every tick while playing, with the previous and current playhead.
+    mutating func advance(from last: Double, to t: Double, loop: Bool, loopCount: Int, pauseEach: Bool, leadIn: Double) -> Decision {
+        if let f = focus, cues.indices.contains(f) {
+            let end = cues[f].end
+            if last < end && t >= end {
+                if loop && (loopCount == 0 || pass < loopCount) { return .loopBack(f) }
+                if pauseEach { return .pause }
+            }
+        }
+        if let idx = cues.lastIndex(startingAtOrBefore: t), idx != focus {
+            // Still in the lead-in just before the focused cue: don't fall back to the previous one.
+            if let f = focus, idx < f, cues.indices.contains(f), t >= cues[f].start - leadIn - 0.3 { return .none }
+            focus = idx
+            pass = 1
+        }
+        return .none
+    }
+}
+
+@MainActor
+final class PlaybackClock: ObservableObject {
+    @Published var time: Double = 0
+}
+
+@MainActor
+final class PlayerEngine: ObservableObject {
+    static let shared = PlayerEngine()
+
+    let player = AVPlayer()
+    let clock = PlaybackClock()
+    weak var mainWindow: NSWindow?
+
+    @Published private(set) var mediaURL: URL?
+    @Published private(set) var hasVideo = false
+    @Published private(set) var duration: Double = 0
+    @Published private(set) var cues: [Cue] = []
+    @Published private(set) var sources: [SubtitleSource] = []
+    @Published private(set) var sourceID: String?
+    @Published private(set) var focusIndex: Int?
+    @Published private(set) var loopPass = 1
+    @Published private(set) var isPlaying = false
+    @Published private(set) var speed: Float = 1.0
+    @Published private(set) var loading: String?
+    @Published private(set) var notice: String?
+    @Published private(set) var toast: String?
+    @Published var loopEnabled = false
+    @Published var pauseAfterEach = false
+    @Published var blindMode: Bool
+    @Published var revealHeld = false
+
+    var subtitleVisible: Bool { !blindMode || revealHeld }
+    var focusCue: Cue? { focusIndex.flatMap { cues.indices.contains($0) ? cues[$0] : nil } }
+
+    private var tracker = SentenceTracker(cues: [])
+    private var lastTick = 0.0
+    private var seekGeneration = 0
+    private var seeking = false
+    private var lastSaved = 0.0
+    private var toastTask: Task<Void, Never>?
+    private var timeObserver: Any?
+    private var statusObservation: NSKeyValueObservation?
+
+    private init() {
+        Prefs.register()
+        blindMode = Prefs.blindByDefault
+        timeObserver = player.addPeriodicTimeObserver(forInterval: CMTime(value: 1, timescale: 50), queue: .main) { [weak self] time in
+            MainActor.assumeIsolated { self?.tick(time.seconds) }
+        }
+        statusObservation = player.observe(\.timeControlStatus, options: [.initial, .new]) { [weak self] p, _ in
+            let playing = p.timeControlStatus != .paused
+            DispatchQueue.main.async { self?.isPlaying = playing }
+        }
+        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.revealHeld = false }   // never get stuck "revealed" if the key-up is lost
+        }
+    }
+
+    // MARK: Tick
+
+    private func tick(_ t: Double) {
+        guard t.isFinite else { return }
+        clock.time = t
+        if seeking { return }
+        defer { lastTick = t }
+        guard player.rate != 0, !cues.isEmpty else { return }
+        let decision = tracker.advance(from: lastTick, to: t, loop: loopEnabled, loopCount: Prefs.loopCount,
+                                       pauseEach: pauseAfterEach, leadIn: Prefs.leadIn)
+        switch decision {
+        case .none: break
+        case .loopBack(let i):
+            tracker.countLoop()
+            seekToStart(of: i, play: true)
+        case .pause:
+            player.pause()
+        }
+        syncFromTracker()
+        if abs(t - lastSaved) > 2 { savePosition() }
+    }
+
+    private func syncFromTracker() {
+        if focusIndex != tracker.focus { focusIndex = tracker.focus }
+        if loopPass != tracker.pass { loopPass = tracker.pass }
+    }
+
+    // MARK: Actions
+
+    func perform(_ action: PlayerAction) {
+        guard mediaURL != nil else { return }
+        switch action {
+        case .playPause: isPlaying ? player.pause() : play()
+        case .prevSentence: goToSentence((focusIndex ?? 1) - 1)
+        case .nextSentence: goToSentence((focusIndex ?? -1) + 1)
+        case .replaySentence: goToSentence(focusIndex ?? 0)
+        case .rewind: jump(to: clock.time - Prefs.rewindSeconds)
+        case .forward: jump(to: clock.time + Prefs.rewindSeconds)
+        case .toggleLoop:
+            loopEnabled.toggle()
+            tracker.jump(to: tracker.focus)
+            syncFromTracker()
+            showToast(loopEnabled ? "单句循环：开（\(Prefs.loopCount == 0 ? "无限" : "\(Prefs.loopCount) 遍")）" : "单句循环：关")
+        case .togglePauseMode:
+            pauseAfterEach.toggle()
+            showToast(pauseAfterEach ? "逐句暂停：开" : "逐句暂停：关")
+        case .revealHold: revealHeld = true
+        case .toggleBlind:
+            blindMode.toggle()
+            showToast(blindMode ? "盲听模式" : "字幕常显")
+        case .slower: setSpeed(speed - 0.1)
+        case .faster: setSpeed(speed + 0.1)
+        case .resetSpeed: setSpeed(1.0)
+        case .favorite: toggleFavorite()
+        }
+    }
+
+    func play() {
+        if duration > 0, clock.time >= duration - 0.1 { seek(to: 0) }
+        player.playImmediately(atRate: speed)
+    }
+
+    func goToSentence(_ index: Int) {
+        guard cues.indices.contains(index) else { return }
+        tracker.jump(to: index)
+        syncFromTracker()
+        seekToStart(of: index, play: true)
+    }
+
+    /// Absolute seek (rewind/forward keys, timeline scrub). Keeps play/pause state.
+    func jump(to seconds: Double) {
+        let target = min(max(0, seconds), max(0, duration - 0.05))
+        tracker.jump(to: cues.lastIndex(startingAtOrBefore: target) ?? (cues.isEmpty ? nil : 0))
+        syncFromTracker()
+        seek(to: target)
+    }
+
+    func setSpeed(_ value: Float) {
+        let v = min(2.0, max(0.5, (value * 20).rounded() / 20))
+        speed = v
+        player.defaultRate = v
+        if player.rate != 0 { player.rate = v }
+        showToast(String(format: "速度 %.2gx", v))
+    }
+
+    func toggleFavorite() {
+        guard let url = mediaURL, let cue = focusCue else { return }
+        let on = FavoritesStore.shared.toggle(path: url.path, cue: cue)
+        showToast(on ? "★ 已收藏这句" : "已取消收藏")
+    }
+
+    private func seekToStart(of index: Int, play: Bool) {
+        seek(to: max(0, cues[index].start - Prefs.leadIn)) { [weak self] in
+            if play { self?.play() }
+        }
+    }
+
+    private func seek(to seconds: Double, then: (() -> Void)? = nil) {
+        seekGeneration += 1
+        let generation = seekGeneration
+        seeking = true
+        lastTick = seconds
+        clock.time = seconds
+        player.seek(to: CMTime(seconds: seconds, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            DispatchQueue.main.async {
+                guard let self, generation == self.seekGeneration else { return }
+                self.seeking = false
+                self.lastTick = seconds
+                then?()
+            }
+        }
+    }
+
+    func showToast(_ text: String) {
+        toast = text
+        toastTask?.cancel()
+        toastTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            if !Task.isCancelled { self?.toast = nil }
+        }
+    }
+
+    // MARK: Opening media & subtitles
+
+    func open(_ url: URL, then: (() -> Void)? = nil) {
+        if SubtitleLoader.fileExtensions.contains(url.pathExtension.lowercased()) {
+            loadExternalSubtitle(url)
+            return
+        }
+        Task {
+            await load(url)
+            then?()
+        }
+    }
+
+    private func load(_ url: URL) async {
+        savePosition()
+        player.pause()
+        loading = "正在打开 \(url.lastPathComponent)…"
+        defer { loading = nil }
+        do {
+            let playURL = try await MediaPreparer.playableURL(for: url) { [weak self] message in
+                Task { @MainActor in self?.loading = message }
+            }
+            let asset = AVURLAsset(url: playURL)
+            let videoTracks = (try? await asset.loadTracks(withMediaType: .video)) ?? []
+            let length = (try? await asset.load(.duration))?.seconds ?? 0
+            let found = await SubtitleLoader.discover(for: url)
+
+            let item = AVPlayerItem(asset: asset)
+            item.audioTimePitchAlgorithm = .timeDomain   // speed changes keep the voice's pitch
+            player.replaceCurrentItem(with: item)
+            player.defaultRate = speed
+            mediaURL = url
+            hasVideo = !videoTracks.isEmpty
+            duration = length.isFinite ? length : 0
+            sources = found
+            notice = nil
+            ResumeStore.touch(url.path)
+            mainWindow?.title = url.lastPathComponent
+
+            if let preferred = found.first(where: \.isEnglish) ?? found.first {
+                await selectSource(preferred)
+            } else {
+                setCues([], sourceID: nil)
+                notice = "没找到字幕：把同名的 .srt / .vtt 放在文件旁边，或直接把字幕文件拖进窗口"
+            }
+
+            let saved = ResumeStore.position(for: url.path) ?? 0
+            let start = (saved > 1 && saved < duration - 3) ? saved : 0
+            jump(to: start)
+            if start > 0 { showToast("从上次的 \(formatTime(start)) 继续") }
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
+    func selectSource(_ source: SubtitleSource) async {
+        guard let url = mediaURL else { return }
+        do {
+            let loaded = try await SubtitleLoader.load(source, media: url)
+            setCues(loaded, sourceID: source.id)
+            notice = loaded.isEmpty ? "这条字幕里没有可用的文字" : nil
+        } catch {
+            notice = error.localizedDescription
+        }
+    }
+
+    func loadExternalSubtitle(_ file: URL) {
+        guard mediaURL != nil else { notice = "先打开视频或音频，再载入字幕"; return }
+        let source = SubtitleSource(kind: .file(file), name: "外挂 · \(file.lastPathComponent)",
+                                    isEnglish: SubtitleLoader.looksEnglish(file.lastPathComponent))
+        if !sources.contains(source) { sources.append(source) }
+        Task { await selectSource(source) }
+    }
+
+    private func setCues(_ newCues: [Cue], sourceID: String?) {
+        cues = newCues
+        self.sourceID = sourceID
+        tracker = SentenceTracker(cues: newCues)
+        tracker.jump(to: newCues.lastIndex(startingAtOrBefore: clock.time) ?? (newCues.isEmpty ? nil : 0))
+        syncFromTracker()
+    }
+
+    func playFavorite(_ fav: Favorite) {
+        mainWindow?.makeKeyAndOrderFront(nil)
+        let go = { [weak self] in
+            guard let self else { return }
+            let index = self.cues.firstIndex { abs($0.start - fav.start) < 0.01 }
+                ?? self.cues.lastIndex(startingAtOrBefore: fav.start)
+            if let index { self.goToSentence(index) }
+        }
+        if mediaURL?.path == fav.path { go() } else { open(URL(fileURLWithPath: fav.path), then: go) }
+    }
+
+    func savePosition() {
+        guard let url = mediaURL else { return }
+        ResumeStore.save(clock.time, for: url.path)
+        lastSaved = clock.time
+    }
+}
+
+func formatTime(_ seconds: Double) -> String {
+    guard seconds.isFinite else { return "--:--" }
+    let s = Int(max(0, seconds))
+    return s >= 3600 ? String(format: "%d:%02d:%02d", s / 3600, s / 60 % 60, s % 60)
+                     : String(format: "%02d:%02d", s / 60, s % 60)
+}
