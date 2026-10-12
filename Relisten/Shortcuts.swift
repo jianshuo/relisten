@@ -24,6 +24,7 @@ enum PlayerAction: String, CaseIterable, Codable, Identifiable {
     case rewind, forward
     case toggleLoop, togglePauseMode
     case revealHold, toggleBlind
+    case translationHold, toggleTranslation
     case slower, faster, resetSpeed
     case favorite
 
@@ -41,6 +42,8 @@ enum PlayerAction: String, CaseIterable, Codable, Identifiable {
         case .togglePauseMode: "逐句暂停 开/关"
         case .revealHold: "按住显示字幕"
         case .toggleBlind: "盲听 / 常显字幕"
+        case .translationHold: "按住看翻译"
+        case .toggleTranslation: "翻译常显 开/关"
         case .slower: "减速"
         case .faster: "加速"
         case .resetSpeed: "恢复 1.0x"
@@ -49,6 +52,9 @@ enum PlayerAction: String, CaseIterable, Codable, Identifiable {
     }
 
     /// Actions that make sense to auto-repeat while the key is held.
+    /// Press-and-hold actions: active while the key is down.
+    static let holds: [PlayerAction] = [.revealHold, .translationHold]
+
     var repeats: Bool { [.prevSentence, .nextSentence, .rewind, .forward, .slower, .faster].contains(self) }
 }
 
@@ -106,6 +112,8 @@ final class ShortcutStore: ObservableObject {
         .toggleLoop: KeyCombo(keyCode: 37, label: "L"),
         .togglePauseMode: KeyCombo(keyCode: 35, label: "P"),
         .toggleBlind: KeyCombo(keyCode: 17, label: "T"),
+        .translationHold: KeyCombo(keyCode: 8, label: "C"),
+        .toggleTranslation: KeyCombo(keyCode: 8, modifiers: .shift, label: "C"),
         .slower: KeyCombo(keyCode: 33, label: "["),
         .faster: KeyCombo(keyCode: 30, label: "]"),
         .resetSpeed: KeyCombo(keyCode: 42, label: "\\"),
@@ -172,11 +180,12 @@ enum KeyMonitor {
         if window.firstResponder is NSText { return event }   // typing in a text field
 
         if event.type == .keyUp {
-            if engine.revealHeld, event.keyCode == store.bindings[.revealHold]?.keyCode {
-                engine.revealHeld = false
-                return nil
+            var released = false
+            for action in PlayerAction.holds where engine.isHolding(action) && event.keyCode == store.bindings[action]?.keyCode {
+                engine.release(action)
+                released = true
             }
-            return event
+            return released ? nil : event
         }
 
         guard let action = store.action(for: KeyCombo(event: event)) else { return event }

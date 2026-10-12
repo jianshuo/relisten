@@ -58,7 +58,7 @@ struct AppCommands: Commands {
                 .disabled(engine.mediaURL == nil)
         }
         CommandMenu("播放") {
-            ForEach(PlayerAction.allCases.filter { $0 != .revealHold }) { action in
+            ForEach(PlayerAction.allCases.filter { !PlayerAction.holds.contains($0) }) { action in
                 Button("\(action.title)\t\(shortcuts.label(action))") { engine.perform(action) }
                     .disabled(engine.mediaURL == nil)
             }
@@ -68,6 +68,16 @@ struct AppCommands: Commands {
                     ForEach(engine.sources) { source in
                         Button((source.id == engine.sourceID ? "✓ " : "   ") + source.name) {
                             Task { await engine.selectSource(source) }
+                        }
+                    }
+                }
+                Menu("翻译轨道") {
+                    Button((engine.translationSourceID == nil ? "✓ " : "   ") + "无") {
+                        Task { await engine.selectTranslation(nil) }
+                    }
+                    ForEach(engine.sources) { source in
+                        Button((source.id == engine.translationSourceID ? "✓ " : "   ") + source.name) {
+                            Task { await engine.selectTranslation(source) }
                         }
                     }
                 }

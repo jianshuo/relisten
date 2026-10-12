@@ -161,6 +161,43 @@ enum SubtitleLoader {
         }
     }
 
+    /// 2 = Simplified Chinese, 1 = other Chinese (Traditional, Cantonese…), 0 = not Chinese.
+    static func chineseRank(_ s: String) -> Int {
+        let l = s.lowercased()
+        let tokens = Set(l.split(whereSeparator: { !$0.isLetter }).map(String.init))
+        let isChinese = !tokens.isDisjoint(with: ["chi", "zho", "zh", "chinese", "chs", "cht", "hans", "hant", "cn", "yue"])
+            || l.contains("中") || l.contains("简") || l.contains("繁")
+        guard isChinese else { return 0 }
+        let simplified = l.contains("simplified") || l.contains("简") || l.contains("hans")
+            || !tokens.isDisjoint(with: ["chs", "sc", "cn"])
+        let traditional = l.contains("traditional") || l.contains("繁") || l.contains("hant")
+            || l.contains("yue") || l.contains("cantonese") || !tokens.isDisjoint(with: ["cht", "tc", "tw", "hk"])
+        return simplified || !traditional ? 2 : 1
+    }
+
+    /// Best default translation track: Simplified Chinese first, then any Chinese.
+    static func defaultTranslation(in sources: [SubtitleSource], excluding mainID: String?) -> SubtitleSource? {
+        let candidates = sources.filter { $0.id != mainID }
+        if let s = candidates.first(where: { chineseRank($0.name) == 2 && !$0.name.lowercased().contains("yue") }) { return s }
+        return candidates.first { chineseRank($0.name) > 0 }
+    }
+
+    /// For each main cue, the translation text overlapping it in time (translation tracks are cut differently).
+    static func align(_ main: [Cue], with translation: [Cue]) -> [String] {
+        guard !translation.isEmpty else { return Array(repeating: "", count: main.count) }
+        return main.map { cue in
+            guard var i = translation.lastIndex(startingAtOrBefore: cue.end - 0.05) else { return "" }
+            var parts: [String] = []
+            while i >= 0, translation[i].end > cue.start {
+                let t = translation[i]
+                let overlap = min(t.end, cue.end) - max(t.start, cue.start)
+                if overlap >= min(0.25, 0.4 * (t.end - t.start)) { parts.append(t.text) }
+                i -= 1
+            }
+            return parts.reversed().joined(separator: " ")
+        }
+    }
+
     static func looksEnglish(_ s: String) -> Bool {
         let l = s.lowercased()
         return l.contains("eng") || l.contains(".en.") || l.contains(".en-") || l.hasSuffix(".en")

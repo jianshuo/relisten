@@ -47,6 +47,36 @@ final class SubtitleParserTests: XCTestCase {
     }
 }
 
+final class TranslationTests: XCTestCase {
+    func src(_ name: String) -> SubtitleSource {
+        SubtitleSource(kind: .file(URL(fileURLWithPath: "/tmp/\(name)")), name: name, isEnglish: false)
+    }
+
+    func testChineseRank() {
+        XCTAssertEqual(SubtitleLoader.chineseRank("内封 #6 · chi · Chinese Simplified"), 2)
+        XCTAssertEqual(SubtitleLoader.chineseRank("内封 #7 · chi · Chinese Traditional"), 1)
+        XCTAssertEqual(SubtitleLoader.chineseRank("内封 #8 · chi · Chinese Yue"), 1)
+        XCTAssertEqual(SubtitleLoader.chineseRank("外挂 · Movie.zh-Hans.srt"), 2)
+        XCTAssertEqual(SubtitleLoader.chineseRank("外挂 · Movie.简体.srt"), 2)
+        XCTAssertEqual(SubtitleLoader.chineseRank("内封 #2 · eng · English"), 0)
+        XCTAssertEqual(SubtitleLoader.chineseRank("内封 #3 · eng · English [SDH]"), 0)
+    }
+
+    func testDefaultTranslationPrefersSimplified() {
+        let sources = [src("eng English"), src("chi Chinese Traditional"), src("chi Chinese Simplified")]
+        XCTAssertEqual(SubtitleLoader.defaultTranslation(in: sources, excluding: sources[0].id)?.name, "chi Chinese Simplified")
+        XCTAssertEqual(SubtitleLoader.defaultTranslation(in: Array(sources.prefix(2)), excluding: sources[0].id)?.name,
+                       "chi Chinese Traditional")
+        XCTAssertNil(SubtitleLoader.defaultTranslation(in: [sources[0]], excluding: sources[0].id))
+    }
+
+    func testAlignByOverlap() {
+        let main = SubtitleParser.normalize([(1, 3, "Hello there."), (4, 6, "Second."), (10, 11, "Lonely.")])
+        let zh = SubtitleParser.normalize([(1.1, 2, "你好"), (2, 3.1, "那边"), (3.0, 4.1, "边界"), (4.2, 6, "第二句")])
+        XCTAssertEqual(SubtitleLoader.align(main, with: zh), ["你好 那边", "第二句", ""])
+    }
+}
+
 final class SentenceTrackerTests: XCTestCase {
     let cues = SubtitleParser.normalize([(1, 2, "a"), (2, 3, "b"), (4, 5, "c")])
 

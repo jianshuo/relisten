@@ -70,8 +70,17 @@ final class PlayerEngine: ObservableObject {
     @Published var pauseAfterEach = false
     @Published var blindMode: Bool
     @Published var revealHeld = false
+    @Published private(set) var translationSourceID: String?
+    @Published private(set) var translationLines: [String] = []   // aligned 1:1 with cues
+    @Published var translationHeld = false
+    @Published var showTranslation = false
 
     var subtitleVisible: Bool { !blindMode || revealHeld }
+    var translationVisible: Bool { (showTranslation || translationHeld) && translationSourceID != nil }
+    var focusTranslation: String? {
+        focusIndex.flatMap { translationLines.indices.contains($0) ? translationLines[$0] : nil }.flatMap { $0.isEmpty ? nil : $0 }
+    }
+    private var translationCues: [Cue] = []
     var focusCue: Cue? { focusIndex.flatMap { cues.indices.contains($0) ? cues[$0] : nil } }
 
     private var tracker = SentenceTracker(cues: [])
@@ -94,7 +103,7 @@ final class PlayerEngine: ObservableObject {
             DispatchQueue.main.async { self?.isPlaying = playing }
         }
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { self?.revealHeld = false }   // never get stuck "revealed" if the key-up is lost
+            MainActor.assumeIsolated { self?.revealHeld = false; self?.translationHeld = false }   // never get stuck "revealed" if the key-up is lost
         }
     }
 
@@ -145,6 +154,12 @@ final class PlayerEngine: ObservableObject {
             pauseAfterEach.toggle()
             showToast(pauseAfterEach ? "逐句暂停：开" : "逐句暂停：关")
         case .revealHold: revealHeld = true
+        case .translationHold:
+            translationHeld = true
+            if translationSourceID == nil { showToast("没有可用的翻译字幕") }
+        case .toggleTranslation:
+            showTranslation.toggle()
+            showToast(translationSourceID == nil ? "没有可用的翻译字幕" : (showTranslation ? "翻译常显：开" : "翻译常显：关"))
         case .toggleBlind:
             blindMode.toggle()
             showToast(blindMode ? "盲听模式" : "字幕常显")
@@ -153,6 +168,15 @@ final class PlayerEngine: ObservableObject {
         case .resetSpeed: setSpeed(1.0)
         case .favorite: toggleFavorite()
         }
+    }
+
+    func isHolding(_ action: PlayerAction) -> Bool {
+        action == .revealHold ? revealHeld : action == .translationHold ? translationHeld : false
+    }
+
+    func release(_ action: PlayerAction) {
+        if action == .revealHold { revealHeld = false }
+        if action == .translationHold { translationHeld = false }
     }
 
     func play() {
@@ -259,8 +283,11 @@ final class PlayerEngine: ObservableObject {
             ResumeStore.touch(url.path)
             mainWindow?.title = url.lastPathComponent
 
+            translationCues = []
+            translationSourceID = nil
             if let preferred = found.first(where: \.isEnglish) ?? found.first {
                 await selectSource(preferred)
+                await selectTranslation(SubtitleLoader.defaultTranslation(in: found, excluding: preferred.id))
             } else {
                 setCues([], sourceID: nil)
                 notice = "没找到字幕：把同名的 .srt / .vtt 放在文件旁边，或直接把字幕文件拖进窗口"
@@ -286,18 +313,50 @@ final class PlayerEngine: ObservableObject {
         }
     }
 
+    /// nil turns the translation off.
+    func selectTranslation(_ source: SubtitleSource?) async {
+        guard let url = mediaURL, let source else {
+            translationCues = []
+            translationSourceID = nil
+            realignTranslation()
+            return
+        }
+        do {
+            translationCues = try await SubtitleLoader.load(source, media: url)
+            translationSourceID = source.id
+        } catch {
+            translationCues = []
+            translationSourceID = nil
+            showToast("翻译字幕读取失败")
+        }
+        realignTranslation()
+    }
+
+    private func realignTranslation() {
+        translationLines = SubtitleLoader.align(cues, with: translationCues)
+    }
+
     func loadExternalSubtitle(_ file: URL) {
         guard mediaURL != nil else { notice = "先打开视频或音频，再载入字幕"; return }
         let source = SubtitleSource(kind: .file(file), name: "外挂 · \(file.lastPathComponent)",
                                     isEnglish: SubtitleLoader.looksEnglish(file.lastPathComponent))
         if !sources.contains(source) { sources.append(source) }
-        Task { await selectSource(source) }
+        Task {
+            // A dropped Chinese file becomes the translation; anything else becomes the main track.
+            if SubtitleLoader.chineseRank(file.lastPathComponent) > 0, sourceID != nil {
+                await selectTranslation(source)
+                showTranslation = true
+            } else {
+                await selectSource(source)
+            }
+        }
     }
 
     private func setCues(_ newCues: [Cue], sourceID: String?) {
         cues = newCues
         self.sourceID = sourceID
         tracker = SentenceTracker(cues: newCues)
+        realignTranslation()
         tracker.jump(to: newCues.lastIndex(startingAtOrBefore: clock.time) ?? (newCues.isEmpty ? nil : 0))
         syncFromTracker()
     }

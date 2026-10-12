@@ -106,6 +106,15 @@ struct SubtitlePanel: View {
                     .textSelection(.enabled)
                     .blur(radius: engine.subtitleVisible ? 0 : 9)
                     .animation(.easeOut(duration: 0.12), value: engine.subtitleVisible)
+                if engine.translationVisible {
+                    Text(engine.focusTranslation ?? "（这句没有对应的翻译）")
+                        .font(.system(size: 19))
+                        .foregroundStyle(engine.focusTranslation == nil ? .tertiary : .secondary)
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+                        .minimumScaleFactor(0.7)
+                        .textSelection(.enabled)
+                }
             } else {
                 Text(engine.notice ?? "按 \(shortcuts.label(.playPause)) 开始播放")
                     .font(.title3).foregroundStyle(.secondary)
@@ -118,6 +127,9 @@ struct SubtitlePanel: View {
                 if engine.blindMode {
                     Label(engine.revealHeld ? "字幕已显示" : "盲听中 · 按住 \(shortcuts.label(.revealHold)) 看字幕",
                           systemImage: engine.revealHeld ? "eye" : "eye.slash")
+                }
+                if engine.translationSourceID != nil && !engine.showTranslation {
+                    Label("按住 \(shortcuts.label(.translationHold)) 看翻译", systemImage: "character.bubble")
                 }
                 if engine.loopEnabled {
                     Label("循环 \(engine.loopPass)/\(Prefs.loopCount == 0 ? "∞" : "\(Prefs.loopCount)")", systemImage: "repeat.1")
@@ -132,7 +144,7 @@ struct SubtitlePanel: View {
             .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 28)
-        .frame(maxWidth: .infinity, minHeight: 150, maxHeight: 190)
+        .frame(maxWidth: .infinity, minHeight: 150, maxHeight: 230)
         .background(Color(nsColor: .textBackgroundColor))
     }
 }
@@ -164,6 +176,8 @@ struct ControlBar: View {
                 toggle("repeat.1", .toggleLoop, on: engine.loopEnabled)
                 toggle("pause.circle", .togglePauseMode, on: engine.pauseAfterEach)
                 toggle(engine.blindMode ? "eye.slash" : "eye", .toggleBlind, on: engine.blindMode)
+                toggle("character.bubble", .toggleTranslation, on: engine.showTranslation)
+                    .disabled(engine.translationSourceID == nil)
                 toggle(isFavorite ? "star.fill" : "star", .favorite, on: isFavorite)
 
                 Spacer()
@@ -255,6 +269,16 @@ struct CueListView: View {
                 Spacer()
                 if engine.sources.count > 1 {
                     Picker("", selection: Binding(
+                        get: { engine.translationSourceID ?? "" },
+                        set: { id in Task { await engine.selectTranslation(engine.sources.first { $0.id == id }) } }
+                    )) {
+                        Text("无翻译").tag("")
+                        ForEach(engine.sources) { Text("译：" + $0.name).tag($0.id) }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: 150)
+                    .help("翻译轨道")
+                    Picker("", selection: Binding(
                         get: { engine.sourceID ?? "" },
                         set: { id in if let s = engine.sources.first(where: { $0.id == id }) { Task { await engine.selectSource(s) } } }
                     )) {
@@ -270,6 +294,8 @@ struct CueListView: View {
             ScrollViewReader { proxy in
                 List(visibleCues) { cue in
                     CueRow(cue: cue,
+                           translation: engine.translationVisible && engine.translationLines.indices.contains(cue.id)
+                               ? engine.translationLines[cue.id] : "",
                            isCurrent: cue.id == engine.focusIndex,
                            isFavorite: isFavorite(cue),
                            visible: engine.subtitleVisible)
@@ -308,6 +334,7 @@ struct CueListView: View {
 
 struct CueRow: View {
     let cue: Cue
+    let translation: String
     let isCurrent: Bool
     let isFavorite: Bool
     let visible: Bool
@@ -315,10 +342,15 @@ struct CueRow: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text(formatTime(cue.start)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            Text(cue.text)
-                .font(.system(size: 13, weight: isCurrent ? .semibold : .regular))
-                .blur(radius: visible ? 0 : 5)
-                .frame(maxWidth: .infinity, alignment: .leading)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(cue.text)
+                    .font(.system(size: 13, weight: isCurrent ? .semibold : .regular))
+                    .blur(radius: visible ? 0 : 5)
+                if !translation.isEmpty {
+                    Text(translation).font(.system(size: 12)).foregroundStyle(.secondary)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
             if isFavorite { Image(systemName: "star.fill").font(.caption).foregroundStyle(.yellow) }
         }
         .padding(.vertical, 3)
@@ -355,7 +387,7 @@ struct EmptyStateView: View {
 
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
                 ForEach([PlayerAction.playPause, .prevSentence, .nextSentence, .replaySentence, .rewind,
-                         .toggleLoop, .togglePauseMode, .revealHold, .slower, .faster, .favorite]) { a in
+                         .toggleLoop, .togglePauseMode, .revealHold, .translationHold, .slower, .faster, .favorite]) { a in
                     GridRow {
                         Text(shortcuts.label(a)).font(.callout.monospaced()).foregroundStyle(Color.accentColor)
                         Text(a.title).font(.callout).foregroundStyle(.secondary)
