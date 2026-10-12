@@ -25,6 +25,7 @@ enum PlayerAction: String, CaseIterable, Codable, Identifiable {
     case toggleLoop, togglePauseMode
     case revealHold, toggleBlind
     case translationHold, toggleTranslation
+    case loopRecent, markFragment, clearFragment
     case slower, faster, resetSpeed
     case favorite
 
@@ -44,6 +45,9 @@ enum PlayerAction: String, CaseIterable, Codable, Identifiable {
         case .toggleBlind: "盲听 / 常显字幕"
         case .translationHold: "按住看翻译"
         case .toggleTranslation: "翻译常显 开/关"
+        case .loopRecent: "循环刚才几秒"
+        case .markFragment: "标记片段起点 / 终点"
+        case .clearFragment: "退出片段循环"
         case .slower: "减速"
         case .faster: "加速"
         case .resetSpeed: "恢复 1.0x"
@@ -114,6 +118,9 @@ final class ShortcutStore: ObservableObject {
         .toggleBlind: KeyCombo(keyCode: 17, label: "T"),
         .translationHold: KeyCombo(keyCode: 8, label: "C"),
         .toggleTranslation: KeyCombo(keyCode: 8, modifiers: .shift, label: "C"),
+        .loopRecent: KeyCombo(keyCode: 15, label: "R"),
+        .markFragment: KeyCombo(keyCode: 0, label: "A"),
+        .clearFragment: KeyCombo(keyCode: 53, label: "⎋"),
         .slower: KeyCombo(keyCode: 33, label: "["),
         .faster: KeyCombo(keyCode: 30, label: "]"),
         .resetSpeed: KeyCombo(keyCode: 42, label: "\\"),

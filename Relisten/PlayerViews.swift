@@ -131,6 +131,14 @@ struct SubtitlePanel: View {
                 if engine.translationSourceID != nil && !engine.showTranslation {
                     Label("按住 \(shortcuts.label(.translationHold)) 看翻译", systemImage: "character.bubble")
                 }
+                if let fr = engine.fragment {
+                    Label(String(format: "片段循环 %.1f 秒 · 第 %d 遍 · %@ 退出", fr.upperBound - fr.lowerBound,
+                                 engine.fragmentPass, shortcuts.label(.clearFragment)), systemImage: "scissors")
+                        .foregroundStyle(Color.accentColor)
+                } else if engine.fragmentStart != nil {
+                    Label("已标记起点 · 再按 \(shortcuts.label(.markFragment)) 设终点", systemImage: "scissors")
+                        .foregroundStyle(Color.accentColor)
+                }
                 if engine.loopEnabled {
                     Label("循环 \(engine.loopPass)/\(Prefs.loopCount == 0 ? "∞" : "\(Prefs.loopCount)")", systemImage: "repeat.1")
                         .foregroundStyle(Color.accentColor)
@@ -174,6 +182,7 @@ struct ControlBar: View {
                 Divider().frame(height: 20).padding(.horizontal, 6)
 
                 toggle("repeat.1", .toggleLoop, on: engine.loopEnabled)
+                toggle("scissors", .loopRecent, on: engine.fragment != nil || engine.fragmentStart != nil)
                 toggle("pause.circle", .togglePauseMode, on: engine.pauseAfterEach)
                 toggle(engine.blindMode ? "eye.slash" : "eye", .toggleBlind, on: engine.blindMode)
                 toggle("character.bubble", .toggleTranslation, on: engine.showTranslation)
@@ -387,7 +396,7 @@ struct EmptyStateView: View {
 
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
                 ForEach([PlayerAction.playPause, .prevSentence, .nextSentence, .replaySentence, .rewind,
-                         .toggleLoop, .togglePauseMode, .revealHold, .translationHold, .slower, .faster, .favorite]) { a in
+                         .toggleLoop, .loopRecent, .markFragment, .togglePauseMode, .revealHold, .translationHold, .slower, .faster, .favorite]) { a in
                     GridRow {
                         Text(shortcuts.label(a)).font(.callout.monospaced()).foregroundStyle(Color.accentColor)
                         Text(a.title).font(.callout).foregroundStyle(.secondary)

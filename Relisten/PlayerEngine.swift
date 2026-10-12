@@ -70,6 +70,10 @@ final class PlayerEngine: ObservableObject {
     @Published var pauseAfterEach = false
     @Published var blindMode: Bool
     @Published var revealHeld = false
+    /// Fragment loop inside a sentence: `fragment` is the active A–B range, `fragmentStart` a pending A mark.
+    @Published private(set) var fragment: ClosedRange<Double>?
+    @Published private(set) var fragmentStart: Double?
+    @Published private(set) var fragmentPass = 1
     @Published private(set) var translationSourceID: String?
     @Published private(set) var translationLines: [String] = []   // aligned 1:1 with cues
     @Published var translationHeld = false
@@ -114,7 +118,15 @@ final class PlayerEngine: ObservableObject {
         clock.time = t
         if seeking { return }
         defer { lastTick = t }
-        guard player.rate != 0, !cues.isEmpty else { return }
+        guard player.rate != 0 else { return }
+        if let fr = fragment {
+            if t >= fr.upperBound {
+                fragmentPass += 1
+                seek(to: fr.lowerBound) { [weak self] in self?.play() }
+            }
+            return
+        }
+        guard !cues.isEmpty else { return }
         let decision = tracker.advance(from: lastTick, to: t, loop: loopEnabled, loopCount: Prefs.loopCount,
                                        pauseEach: pauseAfterEach, leadIn: Prefs.leadIn)
         switch decision {
@@ -154,6 +166,9 @@ final class PlayerEngine: ObservableObject {
             pauseAfterEach.toggle()
             showToast(pauseAfterEach ? "逐句暂停：开" : "逐句暂停：关")
         case .revealHold: revealHeld = true
+        case .loopRecent: loopRecent()
+        case .markFragment: markFragment()
+        case .clearFragment: clearFragment()
         case .translationHold:
             translationHeld = true
             if translationSourceID == nil { showToast("没有可用的翻译字幕") }
@@ -168,6 +183,44 @@ final class PlayerEngine: ObservableObject {
         case .resetSpeed: setSpeed(1.0)
         case .favorite: toggleFavorite()
         }
+    }
+
+    // MARK: Fragment loop
+
+    /// "Didn't catch that": loop the last few seconds, over and over.
+    func loopRecent() {
+        if fragment != nil || fragmentStart != nil { clearFragment(); return }
+        let end = clock.time
+        startFragment(max(0, end - Prefs.rewindSeconds) ... end)
+    }
+
+    /// First press marks A, second press marks B and starts looping, third press stops.
+    func markFragment() {
+        if fragment != nil { clearFragment(); return }
+        guard let a = fragmentStart else {
+            fragmentStart = clock.time
+            showToast("已标记起点，播放到终点时再按 \(ShortcutStore.shared.label(.markFragment))")
+            return
+        }
+        let b = clock.time
+        guard abs(b - a) >= 0.3 else { showToast("片段太短了"); return }
+        startFragment(min(a, b) ... max(a, b))
+    }
+
+    func clearFragment() {
+        guard fragment != nil || fragmentStart != nil else { return }
+        let wasLooping = fragment != nil
+        fragment = nil
+        fragmentStart = nil
+        if wasLooping { showToast("片段循环已结束") }
+    }
+
+    private func startFragment(_ range: ClosedRange<Double>) {
+        fragmentStart = nil
+        fragment = range
+        fragmentPass = 1
+        showToast(String(format: "片段循环 %.1f 秒", range.upperBound - range.lowerBound))
+        seek(to: range.lowerBound) { [weak self] in self?.play() }
     }
 
     func isHolding(_ action: PlayerAction) -> Bool {
@@ -186,6 +239,7 @@ final class PlayerEngine: ObservableObject {
 
     func goToSentence(_ index: Int) {
         guard cues.indices.contains(index) else { return }
+        clearFragment()
         tracker.jump(to: index)
         syncFromTracker()
         seekToStart(of: index, play: true)
@@ -193,6 +247,7 @@ final class PlayerEngine: ObservableObject {
 
     /// Absolute seek (rewind/forward keys, timeline scrub). Keeps play/pause state.
     func jump(to seconds: Double) {
+        clearFragment()
         let target = min(max(0, seconds), max(0, duration - 0.05))
         tracker.jump(to: cues.lastIndex(startingAtOrBefore: target) ?? (cues.isEmpty ? nil : 0))
         syncFromTracker()
