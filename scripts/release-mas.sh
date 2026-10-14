@@ -33,7 +33,7 @@ cp "$PROFILE" "$APP/Contents/embedded.provisionprofile"
 chmod -R u+rwX,go+rX "$APP"   # every file must be world-readable (ITMS 90255)
 
 ENT="$OUT/app.entitlements"
-cp Relisten/Relisten.entitlements "$ENT"
+cp Mac/Relisten.entitlements "$ENT"
 /usr/libexec/PlistBuddy -c "Add :com.apple.application-identifier string $TEAM.$BUNDLE_ID" "$ENT"
 /usr/libexec/PlistBuddy -c "Add :com.apple.developer.team-identifier string $TEAM" "$ENT"
 

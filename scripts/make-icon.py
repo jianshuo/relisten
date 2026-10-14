@@ -10,7 +10,7 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter
 
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "Relisten" / "Assets.xcassets" / "AppIcon.appiconset"
+OUT = ROOT / "Mac" / "Assets.xcassets" / "AppIcon.appiconset"
 CANVAS, BODY = 1024, 824
 
 

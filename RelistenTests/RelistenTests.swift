@@ -38,6 +38,23 @@ final class SubtitleParserTests: XCTestCase {
         XCTAssertEqual(cues[0].end, 1.5, accuracy: 0.001)   // clamped to next start
     }
 
+    func testASS() {
+        let ass = """
+        [Script Info]
+        Title: x
+
+        [Events]
+        Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+        Dialogue: 0,0:00:01.50,0:00:03.00,Default,,0,0,0,,{\\an8}Hello, there.\\NSecond part
+        Comment: 0,0:00:04.00,0:00:05.00,Default,,0,0,0,,ignored
+        Dialogue: 0,0:00:06.00,0:00:07.25,Default,,0,0,0,,Last, with commas, inside.
+        """
+        let cues = SubtitleParser.parseASS(ass)
+        XCTAssertEqual(cues.map(\.text), ["Hello, there. Second part", "Last, with commas, inside."])
+        XCTAssertEqual(cues[0].start, 1.5, accuracy: 0.001)
+        XCTAssertEqual(cues[1].end, 7.25, accuracy: 0.001)
+    }
+
     func testLastIndex() {
         let cues = SubtitleParser.normalize([(1, 2, "a"), (3, 4, "b"), (5, 6, "c")])
         XCTAssertNil(cues.lastIndex(startingAtOrBefore: 0.5))

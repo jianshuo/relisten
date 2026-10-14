@@ -1,5 +1,7 @@
 import AVFoundation
+#if os(macOS)
 import CryptoKit
+#endif
 import Foundation
 
 struct AppError: LocalizedError {
@@ -8,6 +10,7 @@ struct AppError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+#if os(macOS)
 /// External command-line tools (found even when launched from Finder, where PATH is minimal).
 enum Tools {
     static let ffmpeg = find("ffmpeg")
@@ -101,6 +104,16 @@ enum MediaPreparer {
     }
 }
 
+#else
+/// iOS can't spawn helper processes, so only formats AVFoundation plays natively are supported.
+enum MediaPreparer {
+    static func playableURL(for url: URL, progress: @escaping (String) -> Void) async throws -> URL {
+        if (try? await AVURLAsset(url: url).load(.isPlayable)) == true { return url }
+        throw AppError("iPhone / iPad 版暂不支持这个格式（如 mkv），请使用 mp4、mov、m4v、mp3 或 m4a")
+    }
+}
+#endif
+
 /// Last position per file + recent files list.
 enum ResumeStore {
     private static let positionsKey = "resumePositions"
@@ -138,13 +151,21 @@ enum BookmarkStore {
 
     static func has(_ path: String) -> Bool { all[path] != nil }
 
+    #if os(macOS)
+    private static let bookmarkCreation: URL.BookmarkCreationOptions = .withSecurityScope
+    private static let bookmarkResolution: URL.BookmarkResolutionOptions = .withSecurityScope
+    #else
+    private static let bookmarkCreation: URL.BookmarkCreationOptions = []
+    private static let bookmarkResolution: URL.BookmarkResolutionOptions = []
+    #endif
+
     private static var all: [String: Data] {
         (UserDefaults.standard.dictionary(forKey: key) as? [String: Data]) ?? [:]
     }
 
     /// Call while we hold access (right after an open panel, drop or Finder open).
     static func remember(_ url: URL) {
-        guard let data = try? url.bookmarkData(options: .withSecurityScope, includingResourceValuesForKeys: nil,
+        guard let data = try? url.bookmarkData(options: bookmarkCreation, includingResourceValuesForKeys: nil,
                                                relativeTo: nil) else { return }
         var d = all
         d[url.path] = data
@@ -157,7 +178,7 @@ enum BookmarkStore {
         if let url = active[path] { return url }
         guard let data = all[path] else { return nil }
         var stale = false
-        guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, relativeTo: nil,
+        guard let url = try? URL(resolvingBookmarkData: data, options: bookmarkResolution, relativeTo: nil,
                                  bookmarkDataIsStale: &stale) else { return nil }
         guard url.startAccessingSecurityScopedResource() else { return nil }
         active[path] = url

@@ -3,6 +3,7 @@ options:
   bundleIdPrefix: com.wangjianshuo
   deploymentTarget:
     macOS: "14.0"
+    iOS: "17.0"
 settings:
   base:
     SWIFT_VERSION: "5.0"
@@ -10,13 +11,15 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
     CODE_SIGN_IDENTITY: "-"
     CODE_SIGN_STYLE: Manual
+    DEVELOPMENT_TEAM: 97XBW2A43H
 targets:
+  # macOS app (Mac App Store). Same bundle id as iOS → Universal Purchase.
   Relisten:
     type: application
     platform: macOS
-    sources: [Relisten]
+    sources: [Shared, Mac]
     info:
-      path: Relisten/Info.plist
+      path: Mac/Info.plist
       properties:
         CFBundleDisplayName: Relisten
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
@@ -35,12 +38,51 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.wangjianshuo.relisten
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ENABLE_HARDENED_RUNTIME: NO
-        CODE_SIGN_ENTITLEMENTS: Relisten/Relisten.entitlements
+        CODE_SIGN_ENTITLEMENTS: Mac/Relisten.entitlements
         ENABLE_USER_SCRIPT_SANDBOXING: NO
     postBuildScripts:
       - name: Embed LGPL ffmpeg helpers
         script: "\"$PROJECT_DIR/scripts/embed-ffmpeg.sh\""
         basedOnDependencyAnalysis: false
+
+  # iPhone + iPad app
+  RelistenIOS:
+    type: application
+    platform: iOS
+    sources: [Shared, iOS]
+    info:
+      path: iOS/Info.plist
+      properties:
+        CFBundleDisplayName: Relisten
+        CFBundleName: Relisten
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
+        NSHumanReadableCopyright: "© 2026 王建硕"
+        ITSAppUsesNonExemptEncryption: false
+        LSApplicationCategoryType: public.app-category.education
+        UILaunchScreen: {}
+        UIBackgroundModes: [audio]
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UISupportedInterfaceOrientations:
+          [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad:
+          [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown,
+           UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Media
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.movie, public.audio, public.audiovisual-content]
+    settings:
+      base:
+        PRODUCT_NAME: Relisten
+        PRODUCT_BUNDLE_IDENTIFIER: com.wangjianshuo.relisten
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        SUPPORTS_MAC_DESIGNED_FOR_IPHONE_IPAD: NO
+
   RelistenTests:
     type: bundle.unit-test
     platform: macOS

@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import AVFoundation
 import Combine
 
@@ -51,7 +55,9 @@ final class PlayerEngine: ObservableObject {
 
     let player = AVPlayer()
     let clock = PlaybackClock()
+    #if os(macOS)
     weak var mainWindow: NSWindow?
+    #endif
 
     @Published private(set) var mediaURL: URL?
     @Published private(set) var hasVideo = false
@@ -108,10 +114,23 @@ final class PlayerEngine: ObservableObject {
             let playing = p.timeControlStatus != .paused
             DispatchQueue.main.async { self?.isPlaying = playing }
         }
-        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: nil, queue: .main) { [weak self] _ in
+        #if os(macOS)
+        let resign = NSWindow.didResignKeyNotification
+        #else
+        let resign = UIApplication.willResignActiveNotification
+        configureAudioSession()
+        #endif
+        NotificationCenter.default.addObserver(forName: resign, object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.revealHeld = false; self?.translationHeld = false }   // never get stuck "revealed" if the key-up is lost
         }
     }
+
+    #if os(iOS)
+    private func configureAudioSession() {
+        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .spokenAudio)
+        try? AVAudioSession.sharedInstance().setActive(true)
+    }
+    #endif
 
     // MARK: Tick
 
@@ -196,9 +215,11 @@ final class PlayerEngine: ObservableObject {
             seek(to: cues[index].start + 0.4)
             player.pause()
         }
+        #if os(macOS)
         mainWindow?.setFrame(NSRect(x: 80, y: 120, width: 1440, height: 860), display: true)
         NSApp.activate(ignoringOtherApps: true)
         mainWindow?.makeKeyAndOrderFront(nil)
+        #endif
         switch mode {
         case "a":
             blindMode = false; showTranslation = true; loopEnabled = true
@@ -231,7 +252,7 @@ final class PlayerEngine: ObservableObject {
         if fragment != nil { clearFragment(); return }
         guard let a = fragmentStart else {
             fragmentStart = clock.time
-            showToast("已标记起点，播放到终点时再按 \(ShortcutStore.shared.label(.markFragment))")
+            showToast("已标记起点，播放到终点时再\(actionHint(.markFragment))")
             return
         }
         let b = clock.time
@@ -338,6 +359,7 @@ final class PlayerEngine: ObservableObject {
         open(BookmarkStore.access(path) ?? URL(fileURLWithPath: path), then: then)
     }
 
+    #if os(macOS)
     /// Ask the user to grant the media's folder so sibling subtitle files can be read.
     func grantFolderAccess() {
         guard let url = mediaURL else { return }
@@ -348,10 +370,17 @@ final class PlayerEngine: ObservableObject {
         panel.prompt = "允许读取"
         panel.message = "允许 Relisten 读取这个文件夹，就能自动加载视频旁边的字幕文件（.srt / .vtt / .ass）"
         guard panel.runModal() == .OK, let folder = panel.url else { return }
+        folderGranted(folder)
+    }
+    #endif
+
+    /// The user picked the media's folder (Mac open panel / iOS folder picker): load sibling subtitles.
+    func folderGranted(_ folder: URL) {
+        guard let url = mediaURL else { return }
+        _ = folder.startAccessingSecurityScopedResource()
         BookmarkStore.remember(folder)
         Task {
             let found = await SubtitleLoader.discover(for: url)
-            needsFolderAccess = !SubtitleLoader.canReadFolder(of: url)
             for s in found where !sources.contains(s) { sources.append(s) }
             needsFolderAccess = !SubtitleLoader.canReadFolder(of: url)
             if sourceID == nil, let first = sources.first(where: \.isEnglish) ?? sources.first {
@@ -365,6 +394,9 @@ final class PlayerEngine: ObservableObject {
     }
 
     func open(_ url: URL, then: (() -> Void)? = nil) {
+        #if os(iOS)
+        _ = url.startAccessingSecurityScopedResource()   // Files app / share sheet hand us scoped URLs
+        #endif
         BookmarkStore.remember(url)
         if SubtitleLoader.fileExtensions.contains(url.pathExtension.lowercased()) {
             loadExternalSubtitle(url)
@@ -405,7 +437,9 @@ final class PlayerEngine: ObservableObject {
             sources = found
             notice = nil
             ResumeStore.touch(url.path)
+            #if os(macOS)
             mainWindow?.title = url.lastPathComponent
+            #endif
 
             translationCues = []
             translationSourceID = nil
@@ -489,7 +523,9 @@ final class PlayerEngine: ObservableObject {
     }
 
     func playFavorite(_ fav: Favorite) {
+        #if os(macOS)
         mainWindow?.makeKeyAndOrderFront(nil)
+        #endif
         let go = { [weak self] in
             guard let self else { return }
             let index = self.cues.firstIndex { abs($0.start - fav.start) < 0.01 }
@@ -497,6 +533,23 @@ final class PlayerEngine: ObservableObject {
             if let index { self.goToSentence(index) }
         }
         if mediaURL?.path == fav.path { go() } else { open(path: fav.path, then: go) }
+    }
+
+    /// Back to the library (iOS): stop playback and forget the current file's state.
+    func closeMedia() {
+        savePosition()
+        player.pause()
+        player.replaceCurrentItem(with: nil)
+        mediaURL = nil
+        hasVideo = false
+        sources = []
+        translationCues = []
+        translationSourceID = nil
+        fragment = nil
+        fragmentStart = nil
+        notice = nil
+        needsFolderAccess = false
+        setCues([], sourceID: nil)
     }
 
     func savePosition() {

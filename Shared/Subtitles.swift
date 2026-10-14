@@ -97,6 +97,19 @@ enum SubtitleParser {
         return out.enumerated().map { Cue(id: $0.offset, start: $0.element.0, end: $0.element.1, text: $0.element.2) }
     }
 
+    /// Advanced SubStation Alpha: `Dialogue: Layer,Start,End,Style,Name,MarginL,MarginR,MarginV,Effect,Text`
+    static func parseASS(_ raw: String) -> [Cue] {
+        var out: [(Double, Double, String)] = []
+        for line in raw.replacingOccurrences(of: "\r", with: "").components(separatedBy: "\n")
+        where line.hasPrefix("Dialogue:") {
+            let fields = line.dropFirst("Dialogue:".count).split(separator: ",", maxSplits: 9, omittingEmptySubsequences: false)
+            guard fields.count == 10, let s = parseTime(String(fields[1])), let e = parseTime(String(fields[2])) else { continue }
+            let text = clean(String(fields[9]))
+            if !text.isEmpty { out.append((s, e, text)) }
+        }
+        return normalize(out)
+    }
+
     static func decode(_ data: Data) -> String {
         if let s = String(data: data, encoding: .utf8) { return s }
         if data.starts(with: [0xFF, 0xFE]) || data.starts(with: [0xFE, 0xFF]),
@@ -146,11 +159,13 @@ enum SubtitleLoader {
             found.append(SubtitleSource(kind: .file(f), name: "外挂 · \(f.lastPathComponent)",
                                         isEnglish: looksEnglish(f.lastPathComponent)))
         }
+        #if os(macOS)
         if let probed = await probeEmbedded(media) {
             found += probed
-        } else {
-            found += await avEmbedded(media)
+            return found
         }
+        #endif
+        found += await avEmbedded(media)
         return found
     }
 
@@ -158,12 +173,15 @@ enum SubtitleLoader {
         switch source.kind {
         case .file(let url):
             let ext = url.pathExtension.lowercased()
-            if ext == "ass" || ext == "ssa" {
-                return try await ffmpegToCues(input: url, map: nil)
-            }
-            return SubtitleParser.parse(SubtitleParser.decode(try Data(contentsOf: url)))
+            let text = SubtitleParser.decode(try Data(contentsOf: url))
+            return ext == "ass" || ext == "ssa" ? SubtitleParser.parseASS(text) : SubtitleParser.parse(text)
         case .ffmpegStream(let index):
+            #if os(macOS)
             return try await ffmpegToCues(input: media, map: "0:\(index)")
+            #else
+            _ = index
+            return []
+            #endif
         case .avTrack(let index):
             return try await readAVTrack(media: media, trackIndex: index)
         }
@@ -212,6 +230,7 @@ enum SubtitleLoader {
             || l.contains("english") || l == "en"
     }
 
+    #if os(macOS)
     // ffprobe path: lists every text subtitle stream (mkv, mp4, mov …)
     private struct Probe: Decodable {
         struct Stream: Decodable { let index: Int; let codec_name: String?; let tags: [String: String]? }
@@ -245,7 +264,9 @@ enum SubtitleLoader {
         return SubtitleParser.parse(SubtitleParser.decode(r.out))
     }
 
-    // AVFoundation fallback (no ffmpeg): tx3g text tracks in mp4/mov/m4v
+    #endif
+
+    // AVFoundation path (iOS, or Mac without ffmpeg): tx3g text tracks in mp4/mov/m4v
     static func avTracks(_ asset: AVURLAsset) async -> [AVAssetTrack] {
         let a = (try? await asset.loadTracks(withMediaType: .subtitle)) ?? []
         let b = (try? await asset.loadTracks(withMediaType: .text)) ?? []
