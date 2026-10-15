@@ -1,3 +1,4 @@
+import AVFoundation
 import SwiftUI
 
 struct FavoritesView: View {
@@ -83,9 +84,50 @@ struct GeneralSettings: View {
             }
             .help("跳到一句时稍微提前一点开始，避免吞掉第一个词")
             Toggle("打开文件时默认盲听（隐藏字幕）", isOn: $blind)
+            Section {
+                Picker("转换缓存上限", selection: $cacheLimit) {
+                    ForEach([5, 10, 20, 50, 100], id: \.self) { Text("\($0) GB").tag($0) }
+                    Text("不限").tag(0)
+                }
+                .onChange(of: cacheLimit) { _, _ in
+                    DispatchQueue.global(qos: .utility).async {
+                        ConversionCache.enforceLimit(keeping: nil)
+                        DispatchQueue.main.async { refreshCacheSize() }
+                    }
+                }
+                LabeledContent("已用") {
+                    HStack {
+                        Text(cacheSize)
+                        Button("清空…") { confirmClear = true }
+                    }
+                }
+            } header: {
+                Text("转换缓存")
+            } footer: {
+                Text("mkv 等格式第一次打开时会转换一份 mp4 存在这里，下次秒开；原文件删了也能继续播。超出上限时先删最久没看的。")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
-        .frame(height: 260)
+        .frame(height: 420)
+        .onAppear(perform: refreshCacheSize)
+        .confirmationDialog("清空转换缓存？", isPresented: $confirmClear) {
+            Button("清空", role: .destructive) {
+                let playing = (PlayerEngine.shared.player.currentItem?.asset as? AVURLAsset)?.url
+                ConversionCache.clear(keepingFile: playing)
+                refreshCacheSize()
+            }
+        } message: {
+            Text("正在播放的那份会保留。以后再打开这些 mkv 需要重新转换。")
+        }
+    }
+
+    @AppStorage(Prefs.cacheLimitKey) private var cacheLimit = 20
+    @State private var cacheSize = "…"
+    @State private var confirmClear = false
+
+    private func refreshCacheSize() {
+        cacheSize = ByteCountFormatter.string(fromByteCount: ConversionCache.totalBytes, countStyle: .file)
     }
 }
 

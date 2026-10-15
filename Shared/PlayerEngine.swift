@@ -93,6 +93,8 @@ final class PlayerEngine: ObservableObject {
         focusIndex.flatMap { translationLines.indices.contains($0) ? translationLines[$0] : nil }.flatMap { $0.isEmpty ? nil : $0 }
     }
     private var translationCues: [Cue] = []
+    /// Embedded subtitles are read from here: the original, or its converted copy once the original is deleted.
+    private var subtitleMedia: URL?
     var focusCue: Cue? { focusIndex.flatMap { cues.indices.contains($0) ? cues[$0] : nil } }
 
     private var tracker = SentenceTracker(cues: [])
@@ -420,7 +422,13 @@ final class PlayerEngine: ObservableObject {
             let asset = AVURLAsset(url: playURL)
             let videoTracks = (try? await asset.loadTracks(withMediaType: .video)) ?? []
             let length = (try? await asset.load(.duration))?.seconds ?? 0
-            let found = await SubtitleLoader.discover(for: url)
+            let originalGone = !FileManager.default.fileExists(atPath: url.path)
+            subtitleMedia = originalGone ? playURL : url
+            var found = await SubtitleLoader.discover(for: url)
+            if originalGone {   // embedded tracks now come from the converted copy
+                found += await SubtitleLoader.discover(for: playURL).filter { if case .file = $0.kind { false } else { true } }
+            }
+            needsFolderAccess = !originalGone && !SubtitleLoader.canReadFolder(of: url)
 
             let item = AVPlayerItem(asset: asset)
             item.audioTimePitchAlgorithm = .timeDomain   // speed changes keep the voice's pitch
@@ -457,6 +465,7 @@ final class PlayerEngine: ObservableObject {
             let start = (saved > 1 && saved < duration - 3) ? saved : 0
             jump(to: start)
             if start > 0 { showToast("从上次的 \(formatTime(start)) 继续") }
+            if originalGone { showToast("原文件已删除，正在播放转换好的副本") }
             if let demo = UserDefaults.standard.string(forKey: "RelistenDemo") { applyDemo(demo) }
         } catch {
             notice = error.localizedDescription
@@ -464,7 +473,7 @@ final class PlayerEngine: ObservableObject {
     }
 
     func selectSource(_ source: SubtitleSource) async {
-        guard let url = mediaURL else { return }
+        guard let url = subtitleMedia ?? mediaURL else { return }
         do {
             let loaded = try await SubtitleLoader.load(source, media: url)
             setCues(loaded, sourceID: source.id)
@@ -476,7 +485,7 @@ final class PlayerEngine: ObservableObject {
 
     /// nil turns the translation off.
     func selectTranslation(_ source: SubtitleSource?) async {
-        guard let url = mediaURL, let source else {
+        guard let url = subtitleMedia ?? mediaURL, let source else {
             translationCues = []
             translationSourceID = nil
             realignTranslation()
@@ -541,6 +550,7 @@ final class PlayerEngine: ObservableObject {
         player.pause()
         player.replaceCurrentItem(with: nil)
         mediaURL = nil
+        subtitleMedia = nil
         hasVideo = false
         sources = []
         translationCues = []

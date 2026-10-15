@@ -32,6 +32,7 @@ struct RelistenApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         KeyMonitor.install()
+        DispatchQueue.global(qos: .utility).async { ConversionCache.housekeeping() }
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -40,6 +41,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         PlayerEngine.shared.savePosition()
+        Tools.terminateAll()
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }

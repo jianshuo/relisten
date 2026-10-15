@@ -186,6 +186,45 @@ final class EmbeddedSubtitleTests: XCTestCase {
         XCTAssertEqual(cues[1].start, 2.0, accuracy: 0.05)
     }
 
+    func testConvertedCopyKeepsSubtitlesAndSurvivesDeletingTheOriginal() async throws {
+        let mkv = try makeMedia(ext: "mkv", codec: "srt")
+        let converted = try await MediaPreparer.playableURL(for: mkv) { _ in }
+        try FileManager.default.removeItem(at: mkv)
+        let again = try await MediaPreparer.playableURL(for: mkv) { _ in }
+        XCTAssertEqual(again, converted, "deleted original should resolve to its cached copy")
+        let sources = await SubtitleLoader.discover(for: converted)
+        XCTAssertEqual(sources.count, 1)
+        let cues = try await SubtitleLoader.load(sources[0], media: converted)
+        XCTAssertEqual(cues.map(\.text), ["First sentence.", "Second one."])
+    }
+
+    func testSameContentAtAnotherPathReusesTheCache() async throws {
+        let a = try makeMedia(ext: "mkv", codec: "srt")
+        let b = try makeMedia(ext: "mkv", codec: "srt")
+        XCTAssertNotEqual(a, b)
+        let ca = try await MediaPreparer.playableURL(for: a) { _ in }
+        var converted = false
+        let cb = try await MediaPreparer.playableURL(for: b) { msg in if msg.hasPrefix("正在转换格式") || msg.hasPrefix("正在重新编码") { converted = true } }
+        XCTAssertEqual(ca, cb)
+        XCTAssertFalse(converted, "second copy should be a cache hit, not a new conversion")
+    }
+
+    func testLimitEvictsLeastRecentlyUsed() async throws {
+        ConversionCache.clear(keepingFile: nil)
+        let old = try makeMedia(ext: "mkv", codec: "srt")
+        let oldCopy = try await MediaPreparer.playableURL(for: old) { _ in }
+        // a different file (different content) converted later
+        let newer = old.deletingLastPathComponent().appendingPathComponent("other.mkv")
+        try FileManager.default.copyItem(at: old, to: newer)
+        let handle = try FileHandle(forWritingTo: newer)
+        try handle.seekToEnd(); try handle.write(contentsOf: Data(repeating: 0, count: 16)); try handle.close()
+        let newCopy = try await MediaPreparer.playableURL(for: newer) { _ in }
+        XCTAssertNotEqual(oldCopy, newCopy)
+        ConversionCache.enforceLimit(limitBytes: ConversionCache.fileSize(newCopy) + 1)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: oldCopy.path), "older copy evicted")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: newCopy.path), "newest copy kept")
+    }
+
     func testMKVRemuxedToPlayableMP4() async throws {
         let mkv = try makeMedia(ext: "mkv", codec: "srt")
         let playable = try await MediaPreparer.playableURL(for: mkv) { _ in }

@@ -240,13 +240,14 @@ enum SubtitleLoader {
     static func probeEmbedded(_ media: URL) async -> [SubtitleSource]? {
         guard let ffprobe = Tools.ffprobe,
               let r = try? await Tools.run(ffprobe, ["-v", "error", "-select_streams", "s",
-                                                     "-show_entries", "stream=index,codec_name:stream_tags=language,title",
+                                                     "-show_entries", "stream=index,codec_name:stream_tags=language,title,handler_name",
                                                      "-of", "json", media.path]),
               r.status == 0, let probe = try? JSONDecoder().decode(Probe.self, from: r.out) else { return nil }
         return probe.streams.compactMap { s in
             guard textCodecs.contains(s.codec_name ?? "") else { return nil }   // skip PGS/VobSub images
             let lang = s.tags?["language"] ?? ""
-            let title = s.tags?["title"] ?? ""
+            let handler = s.tags?["handler_name"] ?? ""
+            let title = s.tags?["title"] ?? (handler == "SubtitleHandler" ? "" : handler)
             let label = [lang, title].filter { !$0.isEmpty }.joined(separator: " · ")
             return SubtitleSource(kind: .ffmpegStream(s.index),
                                   name: "内封 #\(s.index)" + (label.isEmpty ? "" : " · \(label)"),

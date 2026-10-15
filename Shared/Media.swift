@@ -1,7 +1,4 @@
 import AVFoundation
-#if os(macOS)
-import CryptoKit
-#endif
 import Foundation
 
 struct AppError: LocalizedError {
@@ -10,101 +7,7 @@ struct AppError: LocalizedError {
     var errorDescription: String? { message }
 }
 
-#if os(macOS)
-/// External command-line tools (found even when launched from Finder, where PATH is minimal).
-enum Tools {
-    static let ffmpeg = find("ffmpeg")
-    static let ffprobe = find("ffprobe")
-
-    static func find(_ name: String) -> String? {
-        // The App Store build ships its own LGPL ffmpeg/ffprobe inside the bundle (sandbox-inherited helpers).
-        let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/\(name)").path
-        if FileManager.default.isExecutableFile(atPath: bundled) { return bundled }
-        let envPaths = (ProcessInfo.processInfo.environment["PATH"] ?? "").split(separator: ":").map(String.init)
-        for dir in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin"] + envPaths {
-            let p = (dir as NSString).appendingPathComponent(name)
-            if FileManager.default.isExecutableFile(atPath: p) { return p }
-        }
-        return nil
-    }
-
-    struct Result { let status: Int32; let out: Data; let err: Data }
-
-    /// Runs a process, draining stdout and stderr concurrently so a full pipe can never deadlock it.
-    static func run(_ exe: String, _ args: [String]) async throws -> Result {
-        try await withCheckedThrowingContinuation { cont in
-            DispatchQueue.global(qos: .userInitiated).async {
-                let p = Process()
-                p.executableURL = URL(fileURLWithPath: exe)
-                p.arguments = args
-                let out = Pipe(), err = Pipe()
-                p.standardOutput = out
-                p.standardError = err
-                p.standardInput = FileHandle.nullDevice
-                do { try p.run() } catch { cont.resume(throwing: error); return }
-                var errData = Data()
-                let group = DispatchGroup()
-                group.enter()
-                DispatchQueue.global().async {
-                    errData = err.fileHandleForReading.readDataToEndOfFile()
-                    group.leave()
-                }
-                let outData = out.fileHandleForReading.readDataToEndOfFile()
-                group.wait()
-                p.waitUntilExit()
-                cont.resume(returning: Result(status: p.terminationStatus, out: outData, err: errData))
-            }
-        }
-    }
-}
-
-/// AVPlayer can't open mkv/webm/ogg…; remux (or transcode) those into a cached mp4.
-enum MediaPreparer {
-    static func playableURL(for url: URL, progress: @escaping (String) -> Void) async throws -> URL {
-        if (try? await AVURLAsset(url: url).load(.isPlayable)) == true { return url }
-        guard let ffmpeg = Tools.ffmpeg else {
-            throw AppError("系统播放器不支持这个格式，安装 ffmpeg 后可自动转换：brew install ffmpeg")
-        }
-        let cacheDir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("Relisten", isDirectory: true)
-        try FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        let attrs = try? FileManager.default.attributesOfItem(atPath: url.path)
-        let key = "v2|\(url.path)|\(attrs?[.size] ?? 0)|\((attrs?[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)"
-        let hash = SHA256.hash(data: Data(key.utf8)).prefix(12).map { String(format: "%02x", $0) }.joined()
-        let target = cacheDir.appendingPathComponent("\(hash).mp4")
-        if FileManager.default.fileExists(atPath: target.path) { return target }
-
-        var videoCodec = ""
-        if let ffprobe = Tools.ffprobe,
-           let r = try? await Tools.run(ffprobe, ["-v", "error", "-select_streams", "v:0",
-                                                  "-show_entries", "stream=codec_name", "-of", "csv=p=0", url.path]) {
-            videoCodec = String(decoding: r.out, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-        // Unique temp name: two conversions of the same file must never write into one partial file.
-        let tmp = cacheDir.appendingPathComponent("\(hash).\(UUID().uuidString).partial.mp4")
-        let common = ["-nostdin", "-y", "-v", "error", "-i", url.path, "-map", "0:v:0?", "-map", "0:a:0?", "-sn", "-dn"]
-        // Downmix to stereo: 5.1 dialogue lives in the center channel, and a 6-channel AAC with an
-        // unknown layout plays silent (or voiceless) on Mac speakers/headphones.
-        let audio = ["-c:a", "aac", "-ac", "2", "-b:a", "192k", "-movflags", "+faststart", tmp.path]
-
-        progress("正在转换格式（只需一次）…")
-        var r = try await Tools.run(ffmpeg, common + ["-c:v", "copy"] + (videoCodec == "hevc" ? ["-tag:v", "hvc1"] : []) + audio)
-        let remuxPlayable = r.status == 0 ? (try? await AVURLAsset(url: tmp).load(.isPlayable)) == true : false
-        if !remuxPlayable {
-            progress("正在重新编码视频（较慢，只需一次）…")
-            r = try await Tools.run(ffmpeg, common + ["-c:v", "h264_videotoolbox", "-b:v", "6M"] + audio)
-        }
-        guard r.status == 0 else {
-            try? FileManager.default.removeItem(at: tmp)
-            throw AppError("格式转换失败：" + String(decoding: r.err.suffix(400), as: UTF8.self))
-        }
-        try? FileManager.default.removeItem(at: target)
-        try FileManager.default.moveItem(at: tmp, to: target)
-        return target
-    }
-}
-
-#else
+#if os(iOS)
 /// iOS can't spawn helper processes, so only formats AVFoundation plays natively are supported.
 enum MediaPreparer {
     static func playableURL(for url: URL, progress: @escaping (String) -> Void) async throws -> URL {

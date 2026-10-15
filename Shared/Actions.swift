@@ -5,10 +5,11 @@ enum Prefs {
     static let loopCountKey = "loopCount"          // 0 = forever
     static let leadInKey = "leadIn"                // start a sentence slightly early
     static let blindByDefaultKey = "blindByDefault"
+    static let cacheLimitKey = "cacheLimitGB"           // Mac conversion cache, 0 = unlimited
 
     static func register() {
         UserDefaults.standard.register(defaults: [
-            rewindSecondsKey: 3.0, loopCountKey: 0, leadInKey: 0.15, blindByDefaultKey: true,
+            rewindSecondsKey: 3.0, loopCountKey: 0, leadInKey: 0.15, blindByDefaultKey: true, cacheLimitKey: 20,
         ])
     }
 
@@ -16,6 +17,7 @@ enum Prefs {
     static var loopCount: Int { UserDefaults.standard.integer(forKey: loopCountKey) }
     static var leadIn: Double { UserDefaults.standard.double(forKey: leadInKey) }
     static var blindByDefault: Bool { UserDefaults.standard.bool(forKey: blindByDefaultKey) }
+    static var cacheLimitGB: Int { UserDefaults.standard.integer(forKey: cacheLimitKey) }
 }
 
 enum PlayerAction: String, CaseIterable, Codable, Identifiable {
